@@ -582,6 +582,8 @@ class SemanticsObject {
       hasAction(ui.SemanticsAction.scrollDown) ||
       hasAction(ui.SemanticsAction.scrollUp);
 
+  bool get hasFocus => hasFlag(ui.SemanticsFlag.isFocused);
+
   /// Whether this object represents a hotizontally scrollable area.
   bool get isHorizontalScrollContainer =>
       hasAction(ui.SemanticsAction.scrollLeft) ||
@@ -851,25 +853,9 @@ class SemanticsObject {
         hasIdentityTransform &&
         verticalContainerAdjustment == 0.0 &&
         horizontalContainerAdjustment == 0.0) {
-      if (isDesktop) {
-        element.style
-          ..removeProperty('transform-origin')
-          ..removeProperty('transform');
-      } else {
-        element.style
-          ..removeProperty('top')
-          ..removeProperty('left');
-      }
+      _resetElementOffsets(element);
       if (containerElement != null) {
-        if (isDesktop) {
-          containerElement.style
-            ..removeProperty('transform-origin')
-            ..removeProperty('transform');
-        } else {
-          containerElement.style
-            ..removeProperty('top')
-            ..removeProperty('left');
-        }
+        _resetElementOffsets(containerElement);
       }
       return;
     }
@@ -889,15 +875,29 @@ class SemanticsObject {
         effectiveTransformIsIdentity = effectiveTransform.isIdentity();
       }
     } else if (!hasIdentityTransform) {
-      effectiveTransform = Matrix4.fromFloat32List(transform!);
+      // After https://github.com/dart-lang/language/issues/1274 is implemented,
+      // `transform` will be promoted to non-nullable so we won't need to null
+      // check it (and it will cause a build failure to try to do so).  Until
+      // then, we need to null check it in such a way that won't cause a build
+      // failure once the feature is implemented.  We can do that using an
+      // explicit "if" test.
+      // TODO(paulberry): remove this check once the feature is implemented.
+      if (transform == null) { // ignore: unnecessary_null_comparison
+        throw 'impossible';
+      }
+      effectiveTransform = Matrix4.fromFloat32List(transform);
       effectiveTransformIsIdentity = false;
     }
 
-    if (!effectiveTransformIsIdentity) {
+    if (!effectiveTransformIsIdentity || isMacOrIOS) {
+      if (effectiveTransformIsIdentity) {
+        effectiveTransform = Matrix4.identity();
+      }
       if (isDesktop) {
         element.style
           ..transformOrigin = '0 0 0'
-          ..transform = matrix4ToCssTransform(effectiveTransform);
+          ..transform = (effectiveTransformIsIdentity ? 'translate(0px 0px 0px)'
+              : matrix4ToCssTransform(effectiveTransform));
       } else {
         // Mobile screen readers observed to have errors while calculating the
         // semantics focus borders if css `transform` properties are used.
@@ -915,19 +915,13 @@ class SemanticsObject {
           ..height = '${rect.height}px';
       }
     } else {
-      if (isDesktop) {
-        element.style
-          ..removeProperty('transform-origin')
-          ..removeProperty('transform');
-      } else {
-        element.style
-          ..removeProperty('top')
-          ..removeProperty('left');
-      }
+      _resetElementOffsets(element);
+      // TODO: https://github.com/flutter/flutter/issues/73347
     }
 
     if (containerElement != null) {
       if (!hasZeroRectOffset ||
+          isMacOrIOS ||
           verticalContainerAdjustment != 0.0 ||
           horizontalContainerAdjustment != 0.0) {
         final double translateX = -_rect!.left + horizontalContainerAdjustment;
@@ -942,15 +936,33 @@ class SemanticsObject {
             ..left = '${translateX}px';
         }
       } else {
-        if (isDesktop) {
-          containerElement.style
-            ..removeProperty('transform-origin')
-            ..removeProperty('transform');
-        } else {
-          containerElement.style
-            ..removeProperty('top')
-            ..removeProperty('left');
-        }
+        _resetElementOffsets(containerElement);
+      }
+    }
+  }
+
+  // On Mac OS and iOS, VoiceOver requires left=0 top=0 value to correctly
+  // handle order. See https://github.com/flutter/flutter/issues/73347.
+  static void _resetElementOffsets(html.Element element) {
+    if (isMacOrIOS) {
+      if (isDesktop) {
+        element.style
+          ..transformOrigin = '0 0 0'
+          ..transform = 'translate(0px, 0px)';
+      } else {
+        element.style
+          ..top = '0px'
+          ..left = '0px';
+      }
+    } else {
+      if (isDesktop) {
+        element.style
+          ..removeProperty('transform-origin')
+          ..removeProperty('transform');
+      } else {
+        element.style
+          ..removeProperty('top')
+          ..removeProperty('left');
       }
     }
   }

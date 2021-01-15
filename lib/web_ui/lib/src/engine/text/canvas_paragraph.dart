@@ -58,9 +58,13 @@ class CanvasParagraph implements EngineParagraph {
   @override
   bool get didExceedMaxLines => _layoutService.didExceedMaxLines;
 
+  @override
+  bool isLaidOut = false;
+
   ui.ParagraphConstraints? _lastUsedConstraints;
 
   late final TextLayoutService _layoutService = TextLayoutService(this);
+  late final TextPaintService _paintService = TextPaintService(this);
 
   @override
   void layout(ui.ParagraphConstraints constraints) {
@@ -90,7 +94,9 @@ class CanvasParagraph implements EngineParagraph {
           .benchmark('text_layout', stopwatch.elapsedMicroseconds.toDouble());
     }
 
+    isLaidOut = true;
     _lastUsedConstraints = constraints;
+    _cachedDomElement = null;
   }
 
   // TODO(mdebbar): Returning true means we always require a bitmap canvas. Revisit
@@ -100,10 +106,7 @@ class CanvasParagraph implements EngineParagraph {
 
   @override
   void paint(BitmapCanvas canvas, ui.Offset offset) {
-    // TODO(mdebbar): Loop through the spans and for each box in the span:
-    // 1. Paint the background rect.
-    // 2. Paint the text shadows?
-    // 3. Paint the text.
+    _paintService.paint(canvas, offset);
   }
 
   @override
@@ -113,6 +116,7 @@ class CanvasParagraph implements EngineParagraph {
 
   @override
   html.HtmlElement toDomElement() {
+    assert(isLaidOut);
     final html.HtmlElement? domElement = _cachedDomElement;
     if (domElement == null) {
       return _cachedDomElement ??= _createDomElement();
@@ -121,55 +125,78 @@ class CanvasParagraph implements EngineParagraph {
   }
 
   html.HtmlElement _createDomElement() {
-    final html.HtmlElement element =
+    final html.HtmlElement rootElement =
         domRenderer.createElement('p') as html.HtmlElement;
 
     // 1. Set paragraph-level styles.
-    final html.CssStyleDeclaration cssStyle = element.style;
-    final ui.TextDirection direction =
-        paragraphStyle._textDirection ?? ui.TextDirection.ltr;
-    final ui.TextAlign align = paragraphStyle._textAlign ?? ui.TextAlign.start;
+    _applyParagraphStyleToElement(element: rootElement, style: paragraphStyle);
+    final html.CssStyleDeclaration cssStyle = rootElement.style;
     cssStyle
-      ..direction = _textDirectionToCss(direction)
-      ..textAlign = textAlignToCssValue(align, direction)
       ..position = 'absolute'
-      ..whiteSpace = 'pre-wrap'
-      ..overflowWrap = 'break-word'
-      ..overflow = 'hidden';
+      // Prevent the browser from doing any line breaks in the paragraph. We want
+      // to insert our own <BR> breaks based on layout results.
+      ..whiteSpace = 'pre';
+
+    if (paragraphStyle._maxLines != null || paragraphStyle._ellipsis != null) {
+      cssStyle
+        ..overflowY = 'hidden'
+        ..height = '${height}px';
+    }
 
     if (paragraphStyle._ellipsis != null &&
         (paragraphStyle._maxLines == null || paragraphStyle._maxLines == 1)) {
       cssStyle
-        ..whiteSpace = 'pre'
+        ..width = '${width}px'
+        ..overflowX = 'hidden'
         ..textOverflow = 'ellipsis';
     }
 
     // 2. Append all spans to the paragraph.
-    for (final ParagraphSpan span in spans) {
-      if (span is FlatTextSpan) {
-        final html.HtmlElement spanElement =
-            domRenderer.createElement('span') as html.HtmlElement;
-        _applyTextStyleToElement(
-          element: spanElement,
-          style: span.style,
-          isSpan: true,
-        );
-        domRenderer.append(element, spanElement);
-      } else if (span is PlaceholderSpan) {
-        domRenderer.append(
-          element,
-          _createPlaceholderElement(placeholder: span),
-        );
+
+    ParagraphSpan? span;
+    late html.HtmlElement element;
+    final List<EngineLineMetrics> lines = computeLineMetrics();
+
+    for (int i = 0; i < lines.length; i++) {
+      // Insert a <BR> element before each line except the first line.
+      if (i > 0) {
+        domRenderer.append(element, domRenderer.createElement('br'));
+      }
+
+      for (final RangeBox box in lines[i].boxes!) {
+        if (box is SpanBox) {
+          if (box.span != span) {
+            span = box.span;
+            element = domRenderer.createElement('span') as html.HtmlElement;
+            _applyTextStyleToElement(
+              element: element,
+              style: box.span.style,
+              isSpan: true
+            );
+            domRenderer.append(rootElement, element);
+          }
+          domRenderer.appendText(element, box.toText());
+        } else if (box is PlaceholderBox) {
+          span = box.placeholder;
+          // If there's a line-end after this placeholder, we want the <BR> to
+          // be inserted in the root paragraph element.
+          element = rootElement;
+          domRenderer.append(
+            rootElement,
+            _createPlaceholderElement(placeholder: box.placeholder),
+          );
+        } else {
+          throw UnimplementedError('Unknown box type: ${box.runtimeType}');
+        }
       }
     }
-    return element;
+
+    return rootElement;
   }
 
   @override
   List<ui.TextBox> getBoxesForPlaceholders() {
-    // TODO(mdebbar): After layout, placeholders positions should've been
-    // determined and can be used to compute their boxes.
-    return <ui.TextBox>[];
+    return _layoutService.getBoxesForPlaceholders();
   }
 
   // TODO(mdebbar): Check for child spans if any has styles that can't be drawn
@@ -182,32 +209,18 @@ class CanvasParagraph implements EngineParagraph {
   final bool drawOnCanvas = true;
 
   @override
-  bool isLaidOut = false;
-
-  @override
   List<ui.TextBox> getBoxesForRange(
     int start,
     int end, {
     ui.BoxHeightStyle boxHeightStyle = ui.BoxHeightStyle.tight,
     ui.BoxWidthStyle boxWidthStyle = ui.BoxWidthStyle.tight,
   }) {
-    // TODO(mdebbar): After layout, each paragraph span should have info about
-    // its position and dimensions.
-    //
-    // 1. Find the spans where the `start` and `end` indices fall.
-    // 2. If it's the same span, find the sub-box from `start` to `end`.
-    // 3. Else, find the trailing box(es) of the `start` span, and the `leading`
-    //    box(es) of the `end` span.
-    // 4. Include the boxes of all the spans in between.
-    return <ui.TextBox>[];
+    return _layoutService.getBoxesForRange(start, end, boxHeightStyle, boxWidthStyle);
   }
 
   @override
   ui.TextPosition getPositionForOffset(ui.Offset offset) {
-    // TODO(mdebbar): After layout, each paragraph span should have info about
-    // its position and dimensions. Use that information to find which span the
-    // offset belongs to, then search within that span for the exact character.
-    return const ui.TextPosition(offset: 0);
+    return _layoutService.getPositionForOffset(offset);
   }
 
   @override
@@ -227,7 +240,7 @@ class CanvasParagraph implements EngineParagraph {
   }
 
   @override
-  List<ui.LineMetrics> computeLineMetrics() {
+  List<EngineLineMetrics> computeLineMetrics() {
     return _layoutService.lines;
   }
 }

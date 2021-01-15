@@ -129,6 +129,7 @@ part 'engine/text/layout_service.dart';
 part 'engine/text/line_break_properties.dart';
 part 'engine/text/line_breaker.dart';
 part 'engine/text/measurement.dart';
+part 'engine/text/paint_service.dart';
 part 'engine/text/paragraph.dart';
 part 'engine/text/canvas_paragraph.dart';
 part 'engine/text/ruler.dart';
@@ -145,6 +146,17 @@ part 'engine/validators.dart';
 part 'engine/vector_math.dart';
 part 'engine/web_experiments.dart';
 part 'engine/window.dart';
+
+// The mode the app is running in.
+// Keep these in sync with the same constants on the framework-side under foundation/constants.dart.
+const bool kReleaseMode = bool.fromEnvironment('dart.vm.product', defaultValue: false);
+const bool kProfileMode = bool.fromEnvironment('dart.vm.profile', defaultValue: false);
+const bool kDebugMode = !kReleaseMode && !kProfileMode;
+String get buildMode => kReleaseMode
+  ? 'release'
+  : kProfileMode
+    ? 'profile'
+    : 'debug';
 
 /// A benchmark metric that includes frame-related computations prior to
 /// submitting layer and picture operations to the underlying renderer, such as

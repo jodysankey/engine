@@ -522,11 +522,11 @@ static void LoadLoadingUnitFailure(intptr_t loading_unit_id,
   // TODO(garyq): Implement
 }
 
-static void DynamicFeatureInstallFailure(JNIEnv* env,
-                                         jobject obj,
-                                         jint jLoadingUnitId,
-                                         jstring jError,
-                                         jboolean jTransient) {
+static void DeferredComponentInstallFailure(JNIEnv* env,
+                                            jobject obj,
+                                            jint jLoadingUnitId,
+                                            jstring jError,
+                                            jboolean jTransient) {
   LoadLoadingUnitFailure(static_cast<intptr_t>(jLoadingUnitId),
                          fml::jni::JavaStringToString(env, jError),
                          static_cast<bool>(jTransient));
@@ -571,24 +571,19 @@ static void LoadDartDeferredLibrary(JNIEnv* env,
       std::move(instructions_mapping));
 }
 
-// TODO(garyq): persist additional asset resolvers by updating instead of
-// replacing with newly created asset_manager
-static void UpdateAssetManager(JNIEnv* env,
-                               jobject obj,
-                               jlong shell_holder,
-                               jobject jAssetManager,
-                               jstring jAssetBundlePath) {
-  auto asset_manager = std::make_shared<flutter::AssetManager>();
-  asset_manager->PushBack(std::make_unique<flutter::APKAssetProvider>(
-      env,                                                  // jni environment
-      jAssetManager,                                        // asset manager
-      fml::jni::JavaStringToString(env, jAssetBundlePath))  // apk asset dir
-  );
-  // Create config to set persistent cache asset manager
-  RunConfiguration config(nullptr, std::move(asset_manager));
+static void UpdateJavaAssetManager(JNIEnv* env,
+                                   jobject obj,
+                                   jlong shell_holder,
+                                   jobject jAssetManager,
+                                   jstring jAssetBundlePath) {
+  auto asset_resolver = std::make_unique<flutter::APKAssetProvider>(
+      env,                                                   // jni environment
+      jAssetManager,                                         // asset manager
+      fml::jni::JavaStringToString(env, jAssetBundlePath));  // apk asset dir
 
-  ANDROID_SHELL_HOLDER->GetPlatformView()->UpdateAssetManager(
-      config.GetAssetManager());
+  ANDROID_SHELL_HOLDER->GetPlatformView()->UpdateAssetResolverByType(
+      std::move(asset_resolver),
+      AssetResolver::AssetResolverType::kApkAssetProvider);
 }
 
 bool RegisterApi(JNIEnv* env) {
@@ -753,15 +748,15 @@ bool RegisterApi(JNIEnv* env) {
           .fnPtr = reinterpret_cast<void*>(&LoadDartDeferredLibrary),
       },
       {
-          .name = "nativeUpdateAssetManager",
+          .name = "nativeUpdateJavaAssetManager",
           .signature =
               "(JLandroid/content/res/AssetManager;Ljava/lang/String;)V",
-          .fnPtr = reinterpret_cast<void*>(&UpdateAssetManager),
+          .fnPtr = reinterpret_cast<void*>(&UpdateJavaAssetManager),
       },
       {
-          .name = "nativeDynamicFeatureInstallFailure",
+          .name = "nativeDeferredComponentInstallFailure",
           .signature = "(ILjava/lang/String;Z)V",
-          .fnPtr = reinterpret_cast<void*>(&DynamicFeatureInstallFailure),
+          .fnPtr = reinterpret_cast<void*>(&DeferredComponentInstallFailure),
       },
   };
 
