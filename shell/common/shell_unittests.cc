@@ -62,6 +62,10 @@ class MockPlatformViewDelegate : public PlatformView::Delegate {
   MOCK_METHOD1(OnPlatformViewDispatchPointerDataPacket,
                void(std::unique_ptr<PointerDataPacket> packet));
 
+  MOCK_METHOD2(OnPlatformViewDispatchKeyDataPacket,
+               void(std::unique_ptr<KeyDataPacket> packet,
+                    KeyDataResponse callback));
+
   MOCK_METHOD3(OnPlatformViewDispatchSemanticsAction,
                void(int32_t id,
                     SemanticsAction action,
@@ -135,7 +139,8 @@ class TestAssetResolver : public AssetResolver {
   }
 
   std::vector<std::unique_ptr<fml::Mapping>> GetAsMappings(
-      const std::string& asset_pattern) const override {
+      const std::string& asset_pattern,
+      const std::optional<std::string>& subdir) const override {
     return {};
   };
 
@@ -297,7 +302,7 @@ TEST_F(ShellTest,
                            thread_host.ui_thread->GetTaskRunner(),
                            thread_host.io_thread->GetTaskRunner());
   auto shell = Shell::Create(
-      std::move(task_runners), settings,
+      flutter::PlatformData(), std::move(task_runners), settings,
       [](Shell& shell) {
         // This is unused in the platform view as we are not using the simulated
         // vsync mechanism. We should have better DI in the tests.
@@ -313,6 +318,29 @@ TEST_F(ShellTest,
       [](Shell& shell) { return std::make_unique<Rasterizer>(shell); });
   ASSERT_TRUE(ValidateShell(shell.get()));
   ASSERT_TRUE(DartVMRef::IsInstanceRunning());
+  DestroyShell(std::move(shell), std::move(task_runners));
+  ASSERT_FALSE(DartVMRef::IsInstanceRunning());
+}
+
+TEST_F(ShellTest, InitializeWithDisabledGpu) {
+  ASSERT_FALSE(DartVMRef::IsInstanceRunning());
+  Settings settings = CreateSettingsForFixture();
+  ThreadHost thread_host("io.flutter.test." + GetCurrentTestName() + ".",
+                         ThreadHost::Type::Platform);
+  auto task_runner = thread_host.platform_thread->GetTaskRunner();
+  TaskRunners task_runners("test", task_runner, task_runner, task_runner,
+                           task_runner);
+  auto shell = CreateShell(
+      std::move(settings), std::move(task_runners), /*simulate_vsync=*/false,
+      /*shell_test_external_view_embedder=*/nullptr, /*is_gpu_disabled=*/true);
+  ASSERT_TRUE(DartVMRef::IsInstanceRunning());
+  ASSERT_TRUE(ValidateShell(shell.get()));
+
+  bool is_disabled = false;
+  shell->GetIsGpuDisabledSyncSwitch()->Execute(
+      fml::SyncSwitch::Handlers().SetIfTrue([&] { is_disabled = true; }));
+  ASSERT_TRUE(is_disabled);
+
   DestroyShell(std::move(shell), std::move(task_runners));
   ASSERT_FALSE(DartVMRef::IsInstanceRunning());
 }
@@ -1646,7 +1674,7 @@ class MockTexture : public Texture {
              const SkRect& bounds,
              bool freeze,
              GrDirectContext* context,
-             SkFilterQuality filter_quality) override {}
+             const SkSamplingOptions&) override {}
 
   void OnGrContextCreated() override {}
 
@@ -2409,16 +2437,78 @@ TEST_F(ShellTest, AssetManagerMulti) {
   asset_manager.PushBack(
       std::make_unique<DirectoryAssetBundle>(std::move(asset_dir_fd), false));
 
-  auto mappings = asset_manager.GetAsMappings("(.*)");
-  ASSERT_TRUE(mappings.size() == 4);
+  auto mappings = asset_manager.GetAsMappings("(.*)", std::nullopt);
+  EXPECT_EQ(mappings.size(), 4u);
 
   std::vector<std::string> expected_results = {
       "good0",
       "good1",
   };
 
-  mappings = asset_manager.GetAsMappings("(.*)good(.*)");
-  ASSERT_TRUE(mappings.size() == expected_results.size());
+  mappings = asset_manager.GetAsMappings("(.*)good(.*)", std::nullopt);
+  ASSERT_EQ(mappings.size(), expected_results.size());
+
+  for (auto& mapping : mappings) {
+    std::string result(reinterpret_cast<const char*>(mapping->GetMapping()),
+                       mapping->GetSize());
+    EXPECT_NE(
+        std::find(expected_results.begin(), expected_results.end(), result),
+        expected_results.end());
+  }
+}
+
+#if defined(OS_FUCHSIA)
+TEST_F(ShellTest, AssetManagerMultiSubdir) {
+  std::string subdir_path = "subdir";
+
+  fml::ScopedTemporaryDirectory asset_dir;
+  fml::UniqueFD asset_dir_fd = fml::OpenDirectory(
+      asset_dir.path().c_str(), false, fml::FilePermission::kRead);
+  fml::UniqueFD subdir_fd =
+      fml::OpenDirectory((asset_dir.path() + "/" + subdir_path).c_str(), true,
+                         fml::FilePermission::kReadWrite);
+
+  std::vector<std::string> filenames = {
+      "bad0",
+      "notgood",  // this is to make sure the pattern (.*)good(.*) only matches
+                  // things in the subdirectory
+  };
+
+  std::vector<std::string> subdir_filenames = {
+      "good0",
+      "good1",
+      "bad1",
+  };
+
+  for (auto filename : filenames) {
+    bool success = fml::WriteAtomically(asset_dir_fd, filename.c_str(),
+                                        fml::DataMapping(filename));
+    ASSERT_TRUE(success);
+  }
+
+  for (auto filename : subdir_filenames) {
+    bool success = fml::WriteAtomically(subdir_fd, filename.c_str(),
+                                        fml::DataMapping(filename));
+    ASSERT_TRUE(success);
+  }
+
+  AssetManager asset_manager;
+  asset_manager.PushBack(
+      std::make_unique<DirectoryAssetBundle>(std::move(asset_dir_fd), false));
+
+  auto mappings = asset_manager.GetAsMappings("(.*)", std::nullopt);
+  EXPECT_EQ(mappings.size(), 5u);
+
+  mappings = asset_manager.GetAsMappings("(.*)", subdir_path);
+  EXPECT_EQ(mappings.size(), 3u);
+
+  std::vector<std::string> expected_results = {
+      "good0",
+      "good1",
+  };
+
+  mappings = asset_manager.GetAsMappings("(.*)good(.*)", subdir_path);
+  ASSERT_EQ(mappings.size(), expected_results.size());
 
   for (auto& mapping : mappings) {
     std::string result(reinterpret_cast<const char*>(mapping->GetMapping()),
@@ -2428,6 +2518,7 @@ TEST_F(ShellTest, AssetManagerMulti) {
         expected_results.end());
   }
 }
+#endif  // OS_FUCHSIA
 
 TEST_F(ShellTest, Spawn) {
   auto settings = CreateSettingsForFixture();
@@ -2438,39 +2529,77 @@ TEST_F(ShellTest, Spawn) {
   ASSERT_TRUE(configuration.IsValid());
   configuration.SetEntrypoint("fixturesAreFunctionalMain");
 
+  auto second_configuration = RunConfiguration::InferFromSettings(settings);
+  ASSERT_TRUE(second_configuration.IsValid());
+  second_configuration.SetEntrypoint("testCanLaunchSecondaryIsolate");
+
   fml::AutoResetWaitableEvent main_latch;
+  std::string last_entry_point;
+  // Fulfill native function for the first Shell's entrypoint.
   AddNativeCallback(
-      "SayHiFromFixturesAreFunctionalMain",
-      CREATE_NATIVE_ENTRY([&main_latch](auto args) { main_latch.Signal(); }));
+      "SayHiFromFixturesAreFunctionalMain", CREATE_NATIVE_ENTRY([&](auto args) {
+        last_entry_point = shell->GetEngine()->GetLastEntrypoint();
+        main_latch.Signal();
+      }));
+  // Fulfill native function for the second Shell's entrypoint.
+  AddNativeCallback(
+      // The Dart native function names aren't very consistent but this is just
+      // the native function name of the second vm entrypoint in the fixture.
+      "NotifyNative", CREATE_NATIVE_ENTRY([&](auto args) {}));
 
   RunEngine(shell.get(), std::move(configuration));
   main_latch.Wait();
   ASSERT_TRUE(DartVMRef::IsInstanceRunning());
+  // Check first Shell ran the first entrypoint.
+  ASSERT_EQ("fixturesAreFunctionalMain", last_entry_point);
 
-  PostSync(shell->GetTaskRunners().GetPlatformTaskRunner(), [this,
-                                                             &spawner = shell,
-                                                             settings]() {
-    MockPlatformViewDelegate platform_view_delegate;
-    auto spawn = spawner->Spawn(
-        settings,
-        [&platform_view_delegate](Shell& shell) {
-          auto result = std::make_unique<MockPlatformView>(
-              platform_view_delegate, shell.GetTaskRunners());
-          ON_CALL(*result, CreateRenderingSurface())
-              .WillByDefault(::testing::Invoke(
-                  [] { return std::make_unique<MockSurface>(); }));
-          return result;
-        },
-        [](Shell& shell) { return std::make_unique<Rasterizer>(shell); });
-    ASSERT_NE(nullptr, spawn.get());
-    ASSERT_TRUE(ValidateShell(spawn.get()));
+  PostSync(
+      shell->GetTaskRunners().GetPlatformTaskRunner(),
+      [this, &spawner = shell, &second_configuration]() {
+        MockPlatformViewDelegate platform_view_delegate;
+        auto spawn = spawner->Spawn(
+            std::move(second_configuration),
+            [&platform_view_delegate](Shell& shell) {
+              auto result = std::make_unique<MockPlatformView>(
+                  platform_view_delegate, shell.GetTaskRunners());
+              ON_CALL(*result, CreateRenderingSurface())
+                  .WillByDefault(::testing::Invoke(
+                      [] { return std::make_unique<MockSurface>(); }));
+              return result;
+            },
+            [](Shell& shell) { return std::make_unique<Rasterizer>(shell); });
+        ASSERT_NE(nullptr, spawn.get());
+        ASSERT_TRUE(ValidateShell(spawn.get()));
 
-    PostSync(spawner->GetTaskRunners().GetIOTaskRunner(), [&spawner, &spawn] {
-      ASSERT_EQ(spawner->GetIOManager()->GetResourceContext().get(),
-                spawn->GetIOManager()->GetResourceContext().get());
-    });
-    DestroyShell(std::move(spawn));
-  });
+        PostSync(spawner->GetTaskRunners().GetUITaskRunner(),
+                 [&spawn, &spawner] {
+                   // Check second shell ran the second entrypoint.
+                   ASSERT_EQ("testCanLaunchSecondaryIsolate",
+                             spawn->GetEngine()->GetLastEntrypoint());
+
+                   // TODO(74520): Remove conditional once isolate groups are
+                   // supported by JIT.
+                   if (DartVM::IsRunningPrecompiledCode()) {
+                     ASSERT_NE(spawner->GetEngine()
+                                   ->GetRuntimeController()
+                                   ->GetRootIsolateGroup(),
+                               0u);
+                     ASSERT_EQ(spawner->GetEngine()
+                                   ->GetRuntimeController()
+                                   ->GetRootIsolateGroup(),
+                               spawn->GetEngine()
+                                   ->GetRuntimeController()
+                                   ->GetRootIsolateGroup());
+                   }
+                 });
+
+        PostSync(
+            spawner->GetTaskRunners().GetIOTaskRunner(), [&spawner, &spawn] {
+              ASSERT_EQ(spawner->GetIOManager()->GetResourceContext().get(),
+                        spawn->GetIOManager()->GetResourceContext().get());
+            });
+        DestroyShell(std::move(spawn));
+      });
 
   DestroyShell(std::move(shell));
   ASSERT_FALSE(DartVMRef::IsInstanceRunning());
@@ -2634,6 +2763,79 @@ TEST_F(ShellTest, UpdateAssetResolverByTypeDoesNotReplaceMismatchType) {
 
   DestroyShell(std::move(shell), std::move(task_runners));
   ASSERT_FALSE(DartVMRef::IsInstanceRunning());
+}
+
+TEST_F(ShellTest, CanCreateShellsWithGLBackend) {
+#if !SHELL_ENABLE_GL
+  // GL emulation does not exist on Fuchsia.
+  GTEST_SKIP();
+#endif  // !SHELL_ENABLE_GL
+  auto settings = CreateSettingsForFixture();
+  std::unique_ptr<Shell> shell =
+      CreateShell(settings,                                       //
+                  GetTaskRunnersForFixture(),                     //
+                  false,                                          //
+                  nullptr,                                        //
+                  false,                                          //
+                  ShellTestPlatformView::BackendType::kGLBackend  //
+      );
+  ASSERT_NE(shell, nullptr);
+  ASSERT_TRUE(shell->IsSetup());
+  PlatformViewNotifyCreated(shell.get());
+  auto configuration = RunConfiguration::InferFromSettings(settings);
+  configuration.SetEntrypoint("emptyMain");
+  RunEngine(shell.get(), std::move(configuration));
+  PumpOneFrame(shell.get());
+  PlatformViewNotifyDestroyed(shell.get());
+  DestroyShell(std::move(shell));
+}
+
+TEST_F(ShellTest, CanCreateShellsWithVulkanBackend) {
+#if !SHELL_ENABLE_VULKAN
+  GTEST_SKIP();
+#endif  // !SHELL_ENABLE_VULKAN
+  auto settings = CreateSettingsForFixture();
+  std::unique_ptr<Shell> shell =
+      CreateShell(settings,                                           //
+                  GetTaskRunnersForFixture(),                         //
+                  false,                                              //
+                  nullptr,                                            //
+                  false,                                              //
+                  ShellTestPlatformView::BackendType::kVulkanBackend  //
+      );
+  ASSERT_NE(shell, nullptr);
+  ASSERT_TRUE(shell->IsSetup());
+  PlatformViewNotifyCreated(shell.get());
+  auto configuration = RunConfiguration::InferFromSettings(settings);
+  configuration.SetEntrypoint("emptyMain");
+  RunEngine(shell.get(), std::move(configuration));
+  PumpOneFrame(shell.get());
+  PlatformViewNotifyDestroyed(shell.get());
+  DestroyShell(std::move(shell));
+}
+
+TEST_F(ShellTest, CanCreateShellsWithMetalBackend) {
+#if !SHELL_ENABLE_METAL
+  GTEST_SKIP();
+#endif  // !SHELL_ENABLE_METAL
+  auto settings = CreateSettingsForFixture();
+  std::unique_ptr<Shell> shell =
+      CreateShell(settings,                                          //
+                  GetTaskRunnersForFixture(),                        //
+                  false,                                             //
+                  nullptr,                                           //
+                  false,                                             //
+                  ShellTestPlatformView::BackendType::kMetalBackend  //
+      );
+  ASSERT_NE(shell, nullptr);
+  ASSERT_TRUE(shell->IsSetup());
+  PlatformViewNotifyCreated(shell.get());
+  auto configuration = RunConfiguration::InferFromSettings(settings);
+  configuration.SetEntrypoint("emptyMain");
+  RunEngine(shell.get(), std::move(configuration));
+  PumpOneFrame(shell.get());
+  PlatformViewNotifyDestroyed(shell.get());
+  DestroyShell(std::move(shell));
 }
 
 }  // namespace testing

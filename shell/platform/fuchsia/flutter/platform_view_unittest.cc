@@ -46,7 +46,7 @@ class MockExternalViewEmbedder : public flutter::ExternalViewEmbedder {
       fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger) override {}
   void SubmitFrame(GrDirectContext* context,
                    std::unique_ptr<flutter::SurfaceFrame> frame,
-                   const std::shared_ptr<fml::SyncSwitch>&
+                   const std::shared_ptr<const fml::SyncSwitch>&
                        gpu_disable_sync_switch) override {
     return;
   }
@@ -80,6 +80,10 @@ class MockPlatformViewDelegate : public flutter::PlatformView::Delegate {
   // |flutter::PlatformView::Delegate|
   void OnPlatformViewDispatchPointerDataPacket(
       std::unique_ptr<flutter::PointerDataPacket> packet) {}
+  // |flutter::PlatformView::Delegate|
+  void OnPlatformViewDispatchKeyDataPacket(
+      std::unique_ptr<flutter::KeyDataPacket> packet,
+      std::function<void(bool)> callback) {}
   // |flutter::PlatformView::Delegate|
   void OnPlatformViewDispatchSemanticsAction(int32_t id,
                                              flutter::SemanticsAction action,

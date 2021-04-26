@@ -21,13 +21,14 @@ namespace flutter {
 
 FlutterGLCompositor::FlutterGLCompositor(FlutterViewController* view_controller,
                                          NSOpenGLContext* opengl_context)
-    : open_gl_context_(opengl_context) {
-  FML_CHECK(view_controller != nullptr) << "FlutterViewController* cannot be nullptr";
-  view_controller_ = view_controller;
-}
+    : FlutterCompositor(view_controller), open_gl_context_(opengl_context) {}
 
 bool FlutterGLCompositor::CreateBackingStore(const FlutterBackingStoreConfig* config,
                                              FlutterBackingStore* backing_store_out) {
+  if (!view_controller_) {
+    return false;
+  }
+
   CGSize size = CGSizeMake(config->size.width, config->size.height);
 
   if (!frame_started_) {
@@ -113,11 +114,6 @@ bool FlutterGLCompositor::Present(const FlutterLayer** layers, size_t layers_cou
   return present_callback_();
 }
 
-void FlutterGLCompositor::SetPresentCallback(
-    const FlutterGLCompositor::PresentCallback& present_callback) {
-  present_callback_ = present_callback;
-}
-
 void FlutterGLCompositor::StartFrame() {
   // First reset all the state.
   ca_layer_count_ = 0;
@@ -134,6 +130,10 @@ void FlutterGLCompositor::StartFrame() {
 }
 
 size_t FlutterGLCompositor::CreateCALayer() {
+  if (!view_controller_) {
+    return 0;
+  }
+
   // FlutterGLCompositor manages the lifecycle of content layers.
   // The id for a CALayer starts at 0 and increments by 1 for
   // any given frame.

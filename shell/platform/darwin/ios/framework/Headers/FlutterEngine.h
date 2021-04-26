@@ -55,7 +55,7 @@ extern NSString* const FlutterDefaultInitialRoute;
  * either `-runWithEntrypoint:` or `-runWithEntrypoint:libraryURI` is invoked.
  * One of these methods must be invoked before calling `-setViewController:`.
  */
-FLUTTER_EXPORT
+FLUTTER_DARWIN_EXPORT
 @interface FlutterEngine : NSObject <FlutterTextureRegistry, FlutterPluginRegistry>
 
 /**
@@ -160,8 +160,6 @@ FLUTTER_EXPORT
                      project:(nullable FlutterDartProject*)project
       allowHeadlessExecution:(BOOL)allowHeadlessExecution
           restorationEnabled:(BOOL)restorationEnabled NS_DESIGNATED_INITIALIZER;
-
-+ (instancetype)new NS_UNAVAILABLE;
 
 /**
  * Runs a Dart program on an Isolate from the main Dart library (i.e. the library that

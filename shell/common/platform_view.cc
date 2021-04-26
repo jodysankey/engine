@@ -42,6 +42,12 @@ void PlatformView::DispatchPointerDataPacket(
       pointer_data_packet_converter_.Convert(std::move(packet)));
 }
 
+void PlatformView::DispatchKeyDataPacket(std::unique_ptr<KeyDataPacket> packet,
+                                         KeyDataResponse callback) {
+  delegate_.OnPlatformViewDispatchKeyDataPacket(std::move(packet),
+                                                std::move(callback));
+}
+
 void PlatformView::DispatchSemanticsAction(int32_t id,
                                            SemanticsAction action,
                                            std::vector<uint8_t> args) {
@@ -89,7 +95,7 @@ void PlatformView::NotifyDestroyed() {
 }
 
 sk_sp<GrDirectContext> PlatformView::CreateResourceContext() const {
-  FML_DLOG(WARNING) << "This platform does not setup the resource "
+  FML_DLOG(WARNING) << "This platform does not set up the resource "
                        "context on the IO thread for async texture uploads.";
   return nullptr;
 }

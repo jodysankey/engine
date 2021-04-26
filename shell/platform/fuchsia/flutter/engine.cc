@@ -129,7 +129,7 @@ Engine::Engine(Delegate& delegate,
   };
 
   // Set up the session connection and other Scenic helpers on the raster
-  // thread. We also need to wait for the external view embedder to be setup
+  // thread. We also need to wait for the external view embedder to be set up
   // before creating the shell.
   fml::AutoResetWaitableEvent view_embedder_latch;
   task_runners.GetRasterTaskRunner()->PostTask(fml::MakeCopyable(
@@ -340,8 +340,8 @@ Engine::Engine(Delegate& delegate,
   {
     TRACE_EVENT0("flutter", "CreateShell");
     shell_ = flutter::Shell::Create(
-        std::move(task_runners),             // host task runners
         flutter::PlatformData(),             // default window data
+        std::move(task_runners),             // host task runners
         std::move(settings),                 // shell launch settings
         std::move(on_create_platform_view),  // platform view create callback
         std::move(on_create_rasterizer)      // rasterizer create callback
@@ -353,7 +353,7 @@ Engine::Engine(Delegate& delegate,
     return;
   }
 
-  // Shell has been created. Before we run the engine, setup the isolate
+  // Shell has been created. Before we run the engine, set up the isolate
   // configurator.
   {
     fuchsia::sys::EnvironmentPtr environment;

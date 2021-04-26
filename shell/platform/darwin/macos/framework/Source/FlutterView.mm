@@ -4,6 +4,7 @@
 
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterView.h"
 
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterRenderingBackend.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterResizeSynchronizer.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterSurfaceManager.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/MacOSGLContextSwitch.h"
@@ -27,26 +28,17 @@
   self = [super initWithFrame:NSZeroRect];
   if (self) {
     [self setWantsLayer:YES];
+    [self setLayerContentsRedrawPolicy:NSViewLayerContentsRedrawDuringViewResize];
     _reshapeListener = reshapeListener;
-    _resizableBackingStoreProvider = [[FlutterMetalResizableBackingStoreProvider alloc]
-        initWithDevice:device
-          commandQueue:commandQueue
-            metalLayer:reinterpret_cast<CAMetalLayer*>(self.layer)];
+    _resizableBackingStoreProvider =
+        [[FlutterMetalResizableBackingStoreProvider alloc] initWithDevice:device
+                                                             commandQueue:commandQueue
+                                                                    layer:self.layer];
     _resizeSynchronizer =
         [[FlutterResizeSynchronizer alloc] initWithDelegate:_resizableBackingStoreProvider];
   }
   return self;
 }
-
-#ifdef SHELL_ENABLE_METAL
-+ (Class)layerClass {
-  return [CAMetalLayer class];
-}
-
-- (CALayer*)makeBackingLayer {
-  return [CAMetalLayer layer];
-}
-#endif
 
 - (instancetype)initWithMainContext:(NSOpenGLContext*)mainContext
                     reshapeListener:(id<FlutterViewReshapeListener>)reshapeListener {
@@ -114,6 +106,31 @@
   [super viewDidChangeBackingProperties];
   // Force redraw
   [_reshapeListener viewDidReshape:self];
+}
+
+- (void)shutdown {
+  [_resizeSynchronizer shutdown];
+}
+#pragma mark - NSAccessibility overrides
+
+- (BOOL)isAccessibilityElement {
+  return YES;
+}
+
+- (NSAccessibilityRole)accessibilityRole {
+  return NSAccessibilityGroupRole;
+}
+
+- (NSString*)accessibilityLabel {
+  // TODO(chunhtai): Provides a way to let developer customize the accessibility
+  // label.
+  // https://github.com/flutter/flutter/issues/75446
+  NSString* applicationName =
+      [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+  if (!applicationName) {
+    applicationName = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
+  }
+  return applicationName;
 }
 
 @end
